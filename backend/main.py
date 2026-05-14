@@ -2,6 +2,15 @@
 
 from __future__ import annotations
 
+# Compat shim: pinned langchain-core 0.3.x reads langchain.debug/verbose/llm_cache,
+# but newer langchain may not export them. Set safe defaults before any import chain
+# that touches langchain-core (e.g. via langgraph).
+import langchain  # noqa: E402
+
+for _attr, _default in (("debug", False), ("verbose", False), ("llm_cache", None)):
+    if not hasattr(langchain, _attr):
+        setattr(langchain, _attr, _default)
+
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
