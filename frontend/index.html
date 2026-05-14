@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agent Orchestrator Demo</title>
+  <style>
+    :root {
+      --bg: #0e1116;
+      --panel: #151a22;
+      --panel-2: #1c222d;
+      --border: #2a3140;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --accent-2: #3fb950;
+      --warn: #d29922;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 14px;
+    }
+    header {
+      padding: 14px 22px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: baseline; gap: 14px;
+    }
+    header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+    header .sub { color: var(--muted); font-size: 12px; }
+    main {
+      display: grid; grid-template-columns: 1fr 360px;
+      height: calc(100vh - 51px);
+    }
+    #chat {
+      display: flex; flex-direction: column; border-right: 1px solid var(--border);
+    }
+    #log {
+      flex: 1; overflow-y: auto; padding: 18px 22px;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    .msg { max-width: 75%; padding: 10px 14px; border-radius: 12px; line-height: 1.45; white-space: pre-wrap; }
+    .msg.user { align-self: flex-end; background: var(--accent); color: #0e1116; }
+    .msg.bot { align-self: flex-start; background: var(--panel); border: 1px solid var(--border); }
+    .msg.error { align-self: flex-start; background: #3a1d1d; border: 1px solid #6e2a2a; color: #ffb4b4; }
+    .msg .meta { font-size: 11px; color: var(--muted); margin-top: 6px; }
+    #input-row {
+      display: flex; gap: 8px; padding: 14px 22px; border-top: 1px solid var(--border);
+    }
+    #user-id {
+      width: 130px; background: var(--panel); border: 1px solid var(--border);
+      color: var(--text); padding: 8px 10px; border-radius: 6px; font: inherit;
+    }
+    #message {
+      flex: 1; background: var(--panel); border: 1px solid var(--border);
+      color: var(--text); padding: 8px 12px; border-radius: 6px; font: inherit;
+    }
+    button {
+      background: var(--accent); border: none; color: #0e1116;
+      padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer;
+    }
+    button:hover { filter: brightness(1.1); }
+    button.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+    aside {
+      padding: 18px 18px; overflow-y: auto; background: var(--panel);
+    }
+    aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 8px; }
+    aside section { margin-bottom: 22px; }
+    .pill {
+      display: inline-block; padding: 3px 9px; border-radius: 999px;
+      background: var(--panel-2); border: 1px solid var(--border);
+      font-size: 12px; margin-right: 6px; margin-bottom: 4px;
+    }
+    .pill.smart { border-color: var(--accent-2); color: var(--accent-2); }
+    .pill.lite { border-color: var(--accent); color: var(--accent); }
+    .mem-item, .trace-item {
+      background: var(--panel-2); border: 1px solid var(--border);
+      padding: 8px 10px; border-radius: 6px; margin-bottom: 6px;
+      font-size: 12px; line-height: 1.4;
+    }
+    .trace-item { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+    .empty { color: var(--muted); font-size: 12px; font-style: italic; }
+    .actions { display: flex; gap: 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Agent Orchestrator Demo</h1>
+    <span class="sub">LangGraph supervisor + mem0-style memory + Groq model tiering</span>
+  </header>
+  <main>
+    <div id="chat">
+      <div id="log"></div>
+      <div id="input-row">
+        <input id="user-id" type="text" value="demo_user" />
+        <input id="message" type="text" placeholder="Ask for topics, people or events..." autocomplete="off" />
+        <button id="send">Send</button>
+      </div>
+    </div>
+    <aside>
+      <section>
+        <h2>Selected agents</h2>
+        <div id="agents-panel"><span class="empty">no run yet</span></div>
+      </section>
+      <section>
+        <h2>Model tiering</h2>
+        <div>
+          <span class="pill lite">lite — llama-3.1-8b-instant</span>
+          <span class="pill smart">smart — llama-3.3-70b-versatile</span>
+        </div>
+      </section>
+      <section>
+        <h2>Memory used in last turn</h2>
+        <div id="memory-panel"><span class="empty">no run yet</span></div>
+      </section>
+      <section>
+        <h2>Trace</h2>
+        <div id="trace-panel"><span class="empty">no run yet</span></div>
+      </section>
+      <section>
+        <h2>Actions</h2>
+        <div class="actions">
+          <button class="secondary" id="show-memory">Show stored memory</button>
+          <button class="secondary" id="reset-memory">Reset memory</button>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const log = $("log");
+    const userIdInput = $("user-id");
+    const messageInput = $("message");
+
+    function addMsg(kind, text, meta) {
+      const div = document.createElement("div");
+      div.className = "msg " + kind;
+      div.textContent = text;
+      if (meta) {
+        const m = document.createElement("div");
+        m.className = "meta";
+        m.textContent = meta;
+        div.appendChild(m);
+      }
+      log.appendChild(div);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function renderAgents(list) {
+      const panel = $("agents-panel");
+      if (!list || list.length === 0) { panel.innerHTML = '<span class="empty">none</span>'; return; }
+      panel.innerHTML = list.map(a => `<span class="pill smart">${a}</span>`).join("");
+    }
+    function renderMemory(items) {
+      const panel = $("memory-panel");
+      if (!items || items.length === 0) { panel.innerHTML = '<span class="empty">no prior memory</span>'; return; }
+      panel.innerHTML = items.map(m => `<div class="mem-item">${m.text}</div>`).join("");
+    }
+    function renderTrace(lines) {
+      const panel = $("trace-panel");
+      if (!lines || lines.length === 0) { panel.innerHTML = '<span class="empty">empty</span>'; return; }
+      panel.innerHTML = lines.map(l => `<div class="trace-item">${l}</div>`).join("");
+    }
+
+    async function send() {
+      const user_id = userIdInput.value.trim() || "demo_user";
+      const message = messageInput.value.trim();
+      if (!message) return;
+      addMsg("user", message);
+      messageInput.value = "";
+      try {
+        const resp = await fetch("/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id, message }),
+        });
+        if (!resp.ok) {
+          const t = await resp.text();
+          addMsg("error", `HTTP ${resp.status}: ${t}`);
+          return;
+        }
+        const data = await resp.json();
+        addMsg(
+          "bot",
+          data.final_response,
+          `agents: ${data.selected_agents.join(", ") || "none"} · memory hits: ${data.memory_used.length}`
+        );
+        renderAgents(data.selected_agents);
+        renderMemory(data.memory_used);
+        renderTrace(data.trace);
+      } catch (e) {
+        addMsg("error", "Network error: " + e.message);
+      }
+    }
+
+    $("send").addEventListener("click", send);
+    messageInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") send();
+    });
+
+    $("show-memory").addEventListener("click", async () => {
+      const user_id = userIdInput.value.trim() || "demo_user";
+      const resp = await fetch(`/memory/${encodeURIComponent(user_id)}`);
+      if (!resp.ok) { addMsg("error", "Could not fetch memory"); return; }
+      const data = await resp.json();
+      if (data.memories.length === 0) {
+        addMsg("bot", `(no stored memory for ${user_id})`);
+      } else {
+        const lines = data.memories.map(m => "• " + m.text).join("\n");
+        addMsg("bot", `Stored memory for ${user_id}:\n${lines}`);
+      }
+    });
+
+    $("reset-memory").addEventListener("click", async () => {
+      const user_id = userIdInput.value.trim() || "demo_user";
+      const resp = await fetch(`/reset/${encodeURIComponent(user_id)}`, { method: "POST" });
+      if (!resp.ok) { addMsg("error", "Reset failed"); return; }
+      const data = await resp.json();
+      addMsg("bot", `Memory reset for ${user_id} (removed ${data.removed} items).`);
+      renderMemory([]);
+    });
+  </script>
+</body>
+</html>

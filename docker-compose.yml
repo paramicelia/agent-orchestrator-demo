@@ -1,0 +1,23 @@
+version: "3.9"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: agent-orchestrator-demo:latest
+    container_name: agent-orchestrator-demo
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_SMART_MODEL=${GROQ_SMART_MODEL:-llama-3.3-70b-versatile}
+      - GROQ_LITE_MODEL=${GROQ_LITE_MODEL:-llama-3.1-8b-instant}
+      - MEMORY_DB_PATH=/app/chroma_db
+      - APP_LOG_LEVEL=info
+    volumes:
+      - chroma_data:/app/chroma_db
+
+volumes:
+  chroma_data:
