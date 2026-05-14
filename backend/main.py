@@ -2,29 +2,29 @@
 
 from __future__ import annotations
 
-# Compat shim: pinned langchain-core 0.3.x reads langchain.debug/verbose/llm_cache,
-# but newer langchain may not export them. Set safe defaults before any import chain
-# that touches langchain-core (e.g. via langgraph).
-import langchain  # noqa: E402
+# Compat shim must run before any import chain that touches langchain-core.
+# Pinned langchain-core 0.3.x reads langchain.debug/verbose/llm_cache, but
+# newer langchain may not export them.
+import langchain  # noqa: E402,I001
 
 for _attr, _default in (("debug", False), ("verbose", False), ("llm_cache", None)):
     if not hasattr(langchain, _attr):
         setattr(langchain, _attr, _default)
 
-import logging
-from contextlib import asynccontextmanager
-from pathlib import Path
+import logging  # noqa: E402
+from contextlib import asynccontextmanager  # noqa: E402
+from pathlib import Path  # noqa: E402
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.responses import FileResponse  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from backend.agents.supervisor import build_graph
-from backend.api.routes import router as api_router
-from backend.config import get_settings
-from backend.llm.groq_client import GroqClient
-from backend.memory.mem0_client import Mem0Client
+from backend.agents.supervisor import build_graph  # noqa: E402
+from backend.api.routes import router as api_router  # noqa: E402
+from backend.config import get_settings  # noqa: E402
+from backend.llm.groq_client import GroqClient  # noqa: E402
+from backend.memory.mem0_client import Mem0Client  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
