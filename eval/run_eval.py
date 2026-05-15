@@ -31,12 +31,17 @@ import time
 from pathlib import Path
 from typing import Any
 
-# Compat shim — must match backend/main.py.
-import langchain  # type: ignore[import-not-found]
+# Compat shim — must match backend/main.py and tests/conftest.py.
+# Some environments have a newer ``langchain`` installed globally that no
+# longer exposes ``langchain.debug``; CI has neither. Both cases are fine.
+try:  # pragma: no cover - environment shim
+    import langchain  # type: ignore[import-not-found]
 
-for _attr, _default in (("debug", False), ("verbose", False), ("llm_cache", None)):
-    if not hasattr(langchain, _attr):
-        setattr(langchain, _attr, _default)
+    for _attr, _default in (("debug", False), ("verbose", False), ("llm_cache", None)):
+        if not hasattr(langchain, _attr):
+            setattr(langchain, _attr, _default)
+except Exception:  # noqa: BLE001
+    pass
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # noqa: E402
 

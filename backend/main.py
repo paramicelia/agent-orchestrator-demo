@@ -4,12 +4,17 @@ from __future__ import annotations
 
 # Compat shim must run before any import chain that touches langchain-core.
 # Pinned langchain-core 0.3.x reads langchain.debug/verbose/llm_cache, but
-# newer langchain may not export them.
-import langchain  # noqa: E402,I001
+# newer langchain may not export them. If the top-level ``langchain``
+# package is not installed at all (it is *not* in our requirements), that
+# is fine too — ``langchain-core`` does not need it.
+try:  # noqa: E402,I001
+    import langchain  # type: ignore[import-not-found]
 
-for _attr, _default in (("debug", False), ("verbose", False), ("llm_cache", None)):
-    if not hasattr(langchain, _attr):
-        setattr(langchain, _attr, _default)
+    for _attr, _default in (("debug", False), ("verbose", False), ("llm_cache", None)):
+        if not hasattr(langchain, _attr):
+            setattr(langchain, _attr, _default)
+except Exception:  # noqa: BLE001
+    pass
 
 import logging  # noqa: E402
 from contextlib import asynccontextmanager  # noqa: E402
