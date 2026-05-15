@@ -53,7 +53,7 @@ class GroqClient:
     async def call(
         self,
         model: str,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         *,
         temperature: float = 0.4,
         max_tokens: int = 1024,
@@ -73,6 +73,74 @@ class GroqClient:
         resp = await client.chat.completions.create(**kwargs)
         content = resp.choices[0].message.content or ""
         return content
+
+    async def call_with_tools(
+        self,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        *,
+        temperature: float = 0.3,
+        max_tokens: int = 1024,
+        tool_choice: str = "auto",
+    ) -> dict[str, Any]:
+        """Single tool-aware LLM call.
+
+        Returns a dict shaped like::
+
+            {
+                "content": str | None,
+                "tool_calls": [
+                    {"id": str, "name": str, "arguments": dict[str, Any]},
+                    ...
+                ],
+                "finish_reason": str,
+            }
+
+        Groq follows the OpenAI tool-use protocol, so callers can implement
+        the standard ``model -> tool_call -> tool result -> model`` loop on
+        top of this single primitive. See ``backend/agents/event_agent.py``.
+        """
+        import json
+
+        client = self._ensure_client()
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "tools": tools,
+            "tool_choice": tool_choice,
+        }
+        logger.debug(
+            "groq.call_with_tools model=%s messages=%d tools=%d",
+            model,
+            len(messages),
+            len(tools),
+        )
+        resp = await client.chat.completions.create(**kwargs)
+        choice = resp.choices[0]
+        msg = choice.message
+        tool_calls: list[dict[str, Any]] = []
+        raw_calls = getattr(msg, "tool_calls", None) or []
+        for tc in raw_calls:
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except json.JSONDecodeError:
+                logger.warning("call_with_tools: bad JSON arguments: %r", tc.function.arguments)
+                args = {}
+            tool_calls.append(
+                {
+                    "id": tc.id,
+                    "name": tc.function.name,
+                    "arguments": args,
+                }
+            )
+        return {
+            "content": msg.content,
+            "tool_calls": tool_calls,
+            "finish_reason": choice.finish_reason,
+        }
 
     async def smart(
         self,

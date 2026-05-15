@@ -36,6 +36,7 @@ def test_graph_compiles(mock_groq, memory):
         "people_agent",
         "event_agent",
         "aggregate",
+        "persona_adapt",
         "save_memory",
     }
     assert expected.issubset(nodes), f"missing nodes: {expected - nodes}"

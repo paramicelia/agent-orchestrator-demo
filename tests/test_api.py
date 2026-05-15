@@ -33,23 +33,83 @@ def test_healthz(memory):
         assert r.json() == {"status": "ok"}
 
 
+def test_personas_endpoint(memory):
+    app = _make_app(memory, {})
+    with TestClient(app) as client:
+        r = client.get("/personas")
+        assert r.status_code == 200
+        body = r.json()
+        assert "neutral" in body["personas"]
+        assert "gen-z" in body["personas"]
+
+
 def test_chat_returns_full_payload(memory):
     fake = {
         "final_response": "Try a jazz bar.",
+        "aggregated_response": "Try a jazz bar (aggregated).",
         "selected_agents": ["event"],
         "memory_context": [{"id": "m1", "text": "loves jazz", "metadata": {}, "score": 0.9}],
         "agent_outputs": [{"agent": "event", "content": "jazz bar"}],
+        "tool_calls": [
+            {
+                "name": "search_events",
+                "arguments": {"query": "jazz", "location": "New York"},
+                "output": [{"event_id": "evt_jazz_001", "title": "Vanguard Trio"}],
+            }
+        ],
         "trace": ["memory.load: 1 hits", "intent=['event']"],
     }
     app = _make_app(memory, fake)
     with TestClient(app) as client:
-        r = client.post("/chat", json={"user_id": "demo", "message": "where to go tonight?"})
+        r = client.post(
+            "/chat",
+            json={"user_id": "demo", "message": "where to go tonight?", "persona": "casual"},
+        )
         assert r.status_code == 200
         body = r.json()
         assert body["final_response"] == "Try a jazz bar."
         assert body["selected_agents"] == ["event"]
         assert len(body["memory_used"]) == 1
         assert body["trace"]
+        assert body["persona"] == "casual"
+        assert body["tool_calls"][0]["name"] == "search_events"
+
+
+def test_chat_persona_defaults_neutral(memory):
+    fake = {
+        "final_response": "x",
+        "aggregated_response": "x",
+        "selected_agents": ["topic"],
+        "memory_context": [],
+        "agent_outputs": [],
+        "tool_calls": [],
+        "trace": [],
+    }
+    app = _make_app(memory, fake)
+    with TestClient(app) as client:
+        # No persona field at all
+        r = client.post("/chat", json={"user_id": "u", "message": "hi"})
+        assert r.status_code == 200
+        assert r.json()["persona"] == "neutral"
+
+
+def test_chat_persona_invalid_falls_back(memory):
+    fake = {
+        "final_response": "x",
+        "aggregated_response": "x",
+        "selected_agents": ["topic"],
+        "memory_context": [],
+        "agent_outputs": [],
+        "tool_calls": [],
+        "trace": [],
+    }
+    app = _make_app(memory, fake)
+    with TestClient(app) as client:
+        r = client.post(
+            "/chat", json={"user_id": "u", "message": "hi", "persona": "shakespearean"}
+        )
+        assert r.status_code == 200
+        assert r.json()["persona"] == "neutral"
 
 
 def test_chat_validation(memory):

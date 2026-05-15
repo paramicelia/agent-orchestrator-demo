@@ -1,0 +1,109 @@
+{
+  "description": "Fixed eval dataset for the social concierge. Covers single-intent, multi-intent, tool-use, ambiguous, off-topic and persona cases.",
+  "turns": [
+    {
+      "id": "t01_event_simple",
+      "user_id": "eval_user_01",
+      "message": "Find me a jazz event tonight in New York.",
+      "persona": "neutral",
+      "expected_agents": ["event"],
+      "expected_tools": ["search_events"],
+      "expected_themes": ["jazz", "New York", "tonight"],
+      "category": "single_intent_tool_use"
+    },
+    {
+      "id": "t02_topic_simple",
+      "user_id": "eval_user_02",
+      "message": "Suggest two conversation topics for a first date.",
+      "persona": "neutral",
+      "expected_agents": ["topic"],
+      "expected_tools": [],
+      "expected_themes": ["conversation", "date"],
+      "category": "single_intent"
+    },
+    {
+      "id": "t03_people_simple",
+      "user_id": "eval_user_03",
+      "message": "Who from my circle should I reconnect with this month?",
+      "persona": "neutral",
+      "expected_agents": ["people"],
+      "expected_tools": [],
+      "expected_themes": ["reconnect", "circle"],
+      "category": "single_intent"
+    },
+    {
+      "id": "t04_multi_event_people",
+      "user_id": "eval_user_04",
+      "message": "Plan my Saturday — I want to do something fun and bring friends.",
+      "persona": "neutral",
+      "expected_agents": ["event", "people"],
+      "expected_tools": ["search_events"],
+      "expected_themes": ["Saturday", "friends"],
+      "category": "multi_intent"
+    },
+    {
+      "id": "t05_multi_all",
+      "user_id": "eval_user_05",
+      "message": "Help me plan a date night — ideas, a place to go, and who I could double-date with.",
+      "persona": "neutral",
+      "expected_agents": ["topic", "people", "event"],
+      "expected_tools": ["search_events"],
+      "expected_themes": ["date night", "place"],
+      "category": "multi_intent"
+    },
+    {
+      "id": "t06_ambiguous",
+      "user_id": "eval_user_06",
+      "message": "I'm bored.",
+      "persona": "neutral",
+      "expected_agents": ["topic"],
+      "expected_tools": [],
+      "expected_themes": [],
+      "category": "ambiguous"
+    },
+    {
+      "id": "t07_offtopic",
+      "user_id": "eval_user_07",
+      "message": "What's the capital of France?",
+      "persona": "neutral",
+      "expected_agents": ["topic"],
+      "expected_tools": [],
+      "expected_themes": [],
+      "category": "off_topic_safe_fallback"
+    },
+    {
+      "id": "t08_memory_grounded",
+      "user_id": "eval_user_08",
+      "message": "Suggest a Sunday morning thing I'd like.",
+      "persona": "neutral",
+      "prior_memories": [
+        "User loves jazz and small live shows.",
+        "User dislikes crowded clubs."
+      ],
+      "expected_agents": ["event"],
+      "expected_tools": ["search_events"],
+      "expected_themes": ["jazz", "Sunday"],
+      "category": "memory_grounded"
+    },
+    {
+      "id": "t09_persona_genz",
+      "user_id": "eval_user_09",
+      "message": "What should I read this week?",
+      "persona": "gen-z",
+      "expected_agents": ["topic"],
+      "expected_tools": [],
+      "expected_themes": [],
+      "category": "persona_rewrite"
+    },
+    {
+      "id": "t10_persona_formal",
+      "user_id": "eval_user_10",
+      "message": "Recommend a free online event for me to attend this week.",
+      "persona": "formal",
+      "expected_agents": ["event"],
+      "expected_tools": ["search_events"],
+      "expected_themes": ["online", "free"],
+      "category": "persona_rewrite_tool_use"
+    }
+  ]
+}

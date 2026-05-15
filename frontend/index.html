@@ -30,7 +30,7 @@
     header h1 { margin: 0; font-size: 16px; font-weight: 600; }
     header .sub { color: var(--muted); font-size: 12px; }
     main {
-      display: grid; grid-template-columns: 1fr 360px;
+      display: grid; grid-template-columns: 1fr 380px;
       height: calc(100vh - 51px);
     }
     #chat {
@@ -47,14 +47,20 @@
     .msg .meta { font-size: 11px; color: var(--muted); margin-top: 6px; }
     #input-row {
       display: flex; gap: 8px; padding: 14px 22px; border-top: 1px solid var(--border);
+      flex-wrap: wrap;
     }
     #user-id {
       width: 130px; background: var(--panel); border: 1px solid var(--border);
       color: var(--text); padding: 8px 10px; border-radius: 6px; font: inherit;
     }
+    #persona {
+      background: var(--panel); border: 1px solid var(--border);
+      color: var(--text); padding: 8px 10px; border-radius: 6px; font: inherit;
+    }
     #message {
       flex: 1; background: var(--panel); border: 1px solid var(--border);
       color: var(--text); padding: 8px 12px; border-radius: 6px; font: inherit;
+      min-width: 220px;
     }
     button {
       background: var(--accent); border: none; color: #0e1116;
@@ -74,12 +80,16 @@
     }
     .pill.smart { border-color: var(--accent-2); color: var(--accent-2); }
     .pill.lite { border-color: var(--accent); color: var(--accent); }
-    .mem-item, .trace-item {
+    .pill.tool { border-color: var(--warn); color: var(--warn); }
+    .mem-item, .trace-item, .tool-item {
       background: var(--panel-2); border: 1px solid var(--border);
       padding: 8px 10px; border-radius: 6px; margin-bottom: 6px;
       font-size: 12px; line-height: 1.4;
     }
     .trace-item { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+    .tool-item { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+    .tool-item .tool-name { color: var(--warn); font-weight: 600; }
+    .tool-item .tool-out { color: var(--muted); margin-top: 4px; max-height: 90px; overflow: auto; white-space: pre-wrap; }
     .empty { color: var(--muted); font-size: 12px; font-style: italic; }
     .actions { display: flex; gap: 8px; }
   </style>
@@ -87,13 +97,20 @@
 <body>
   <header>
     <h1>Agent Orchestrator Demo</h1>
-    <span class="sub">LangGraph supervisor + mem0-style memory + Groq model tiering</span>
+    <span class="sub">LangGraph supervisor + tool-use + memory + persona adapter</span>
   </header>
   <main>
     <div id="chat">
       <div id="log"></div>
       <div id="input-row">
         <input id="user-id" type="text" value="demo_user" />
+        <select id="persona" title="Reply persona">
+          <option value="neutral">neutral</option>
+          <option value="formal">formal</option>
+          <option value="casual">casual</option>
+          <option value="gen-z">gen-z</option>
+          <option value="elderly-friendly">elderly-friendly</option>
+        </select>
         <input id="message" type="text" placeholder="Ask for topics, people or events..." autocomplete="off" />
         <button id="send">Send</button>
       </div>
@@ -102,6 +119,10 @@
       <section>
         <h2>Selected agents</h2>
         <div id="agents-panel"><span class="empty">no run yet</span></div>
+      </section>
+      <section>
+        <h2>Tools called this turn</h2>
+        <div id="tools-panel"><span class="empty">no run yet</span></div>
       </section>
       <section>
         <h2>Model tiering</h2>
@@ -132,6 +153,7 @@
     const $ = (id) => document.getElementById(id);
     const log = $("log");
     const userIdInput = $("user-id");
+    const personaInput = $("persona");
     const messageInput = $("message");
 
     function addMsg(kind, text, meta) {
@@ -153,6 +175,18 @@
       if (!list || list.length === 0) { panel.innerHTML = '<span class="empty">none</span>'; return; }
       panel.innerHTML = list.map(a => `<span class="pill smart">${a}</span>`).join("");
     }
+    function renderTools(list) {
+      const panel = $("tools-panel");
+      if (!list || list.length === 0) { panel.innerHTML = '<span class="empty">no tools called</span>'; return; }
+      const pills = list.map(t => `<span class="pill tool">${t.name}</span>`).join("");
+      const items = list.map(t => `
+        <div class="tool-item">
+          <div class="tool-name">${t.name}(${JSON.stringify(t.arguments)})</div>
+          <div class="tool-out">${JSON.stringify(t.output, null, 0)}</div>
+        </div>
+      `).join("");
+      panel.innerHTML = pills + items;
+    }
     function renderMemory(items) {
       const panel = $("memory-panel");
       if (!items || items.length === 0) { panel.innerHTML = '<span class="empty">no prior memory</span>'; return; }
@@ -166,6 +200,7 @@
 
     async function send() {
       const user_id = userIdInput.value.trim() || "demo_user";
+      const persona = personaInput.value || "neutral";
       const message = messageInput.value.trim();
       if (!message) return;
       addMsg("user", message);
@@ -174,7 +209,7 @@
         const resp = await fetch("/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ user_id, message }),
+          body: JSON.stringify({ user_id, message, persona }),
         });
         if (!resp.ok) {
           const t = await resp.text();
@@ -182,12 +217,16 @@
           return;
         }
         const data = await resp.json();
-        addMsg(
-          "bot",
-          data.final_response,
-          `agents: ${data.selected_agents.join(", ") || "none"} · memory hits: ${data.memory_used.length}`
-        );
+        const toolNames = (data.tool_calls || []).map(t => t.name).join(", ");
+        const metaParts = [
+          `agents: ${data.selected_agents.join(", ") || "none"}`,
+          `memory hits: ${data.memory_used.length}`,
+          `persona: ${data.persona}`,
+        ];
+        if (toolNames) metaParts.push(`tools: ${toolNames}`);
+        addMsg("bot", data.final_response, metaParts.join(" · "));
         renderAgents(data.selected_agents);
+        renderTools(data.tool_calls);
         renderMemory(data.memory_used);
         renderTrace(data.trace);
       } catch (e) {

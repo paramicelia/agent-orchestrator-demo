@@ -8,6 +8,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from backend.agents.persona_adapter import SUPPORTED_PERSONAS, normalise_persona
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -16,15 +18,22 @@ router = APIRouter()
 class ChatRequest(BaseModel):
     user_id: str = Field(..., min_length=1, max_length=64)
     message: str = Field(..., min_length=1, max_length=2000)
+    persona: str | None = Field(
+        default="neutral",
+        description=f"Reply tone. One of: {', '.join(SUPPORTED_PERSONAS)}",
+    )
 
 
 class ChatResponse(BaseModel):
     user_id: str
     message: str
+    persona: str
     final_response: str
+    aggregated_response: str
     selected_agents: list[str]
     memory_used: list[dict[str, Any]]
     agent_outputs: list[dict[str, Any]]
+    tool_calls: list[dict[str, Any]]
     trace: list[str]
 
 
@@ -44,15 +53,24 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@router.get("/personas")
+async def personas() -> dict[str, list[str]]:
+    """List the personas the persona_adapt node understands."""
+    return {"personas": list(SUPPORTED_PERSONAS)}
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, request: Request) -> ChatResponse:
     graph = request.app.state.graph
     if graph is None:
         raise HTTPException(503, "Graph not initialised")
+    persona = normalise_persona(req.persona)
     initial_state: dict[str, Any] = {
         "user_id": req.user_id,
         "message": req.message,
+        "persona": persona,
         "agent_outputs": [],
+        "tool_calls": [],
         "trace": [],
     }
     try:
@@ -67,10 +85,13 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
     return ChatResponse(
         user_id=req.user_id,
         message=req.message,
+        persona=persona,
         final_response=result.get("final_response", ""),
+        aggregated_response=result.get("aggregated_response", ""),
         selected_agents=result.get("selected_agents", []),
         memory_used=result.get("memory_context", []),
         agent_outputs=result.get("agent_outputs", []),
+        tool_calls=result.get("tool_calls", []),
         trace=result.get("trace", []),
     )
 

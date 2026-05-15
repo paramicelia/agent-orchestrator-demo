@@ -14,6 +14,7 @@ class AgentState(TypedDict, total=False):
     # Inputs
     user_id: str
     message: str
+    persona: str
 
     # Memory layer outputs
     memory_context: list[dict[str, Any]]
@@ -25,7 +26,14 @@ class AgentState(TypedDict, total=False):
     # Specialist agent outputs — each agent appends one dict.
     agent_outputs: Annotated[list[dict[str, Any]], operator.add]
 
-    # Aggregator output
+    # Tool-call audit log produced by the event_agent (and any future
+    # specialist that uses tool-use). Each entry: {name, arguments, output}.
+    tool_calls: Annotated[list[dict[str, Any]], operator.add]
+
+    # Aggregator output (pre-persona)
+    aggregated_response: str
+
+    # Persona-adapted output — what the user actually sees
     final_response: str
 
     # Bookkeeping

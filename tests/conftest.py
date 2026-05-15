@@ -62,9 +62,32 @@ def mock_groq() -> GroqClient:
         # default: only topic
         return {"selected_agents": ["topic"], "reasoning": "stub"}
 
+    async def fake_call(
+        model: str,
+        messages: list[dict[str, Any]],
+        **_: Any,
+    ) -> str:
+        return "[call-reply]"
+
+    async def fake_call_with_tools(
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        **_: Any,
+    ) -> dict[str, Any]:
+        # Default: model returns no tool calls and a short reply. Tests that
+        # need a real tool-use loop should patch this fixture directly.
+        return {
+            "content": "[event-reply] no tools needed",
+            "tool_calls": [],
+            "finish_reason": "stop",
+        }
+
     client.smart = AsyncMock(side_effect=fake_smart)  # type: ignore[method-assign]
     client.lite = AsyncMock(side_effect=fake_lite)  # type: ignore[method-assign]
     client.lite_json = AsyncMock(side_effect=fake_lite_json)  # type: ignore[method-assign]
+    client.call = AsyncMock(side_effect=fake_call)  # type: ignore[method-assign]
+    client.call_with_tools = AsyncMock(side_effect=fake_call_with_tools)  # type: ignore[method-assign]
     return client
 
 

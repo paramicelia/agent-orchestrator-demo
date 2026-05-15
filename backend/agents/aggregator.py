@@ -58,6 +58,10 @@ async def aggregate(
 async def aggregator_node(state: AgentState, client: GroqClient) -> dict[str, Any]:
     text = await aggregate(state["message"], state.get("agent_outputs", []), client)
     return {
+        # Pre-persona text. The persona_adapt node writes the final user-facing
+        # text into ``final_response`` (and short-circuits to this text when the
+        # persona is "neutral").
+        "aggregated_response": text,
         "final_response": text,
         "trace": [f"aggregate: {len(state.get('agent_outputs', []))} drafts -> {len(text)} chars"],
     }
