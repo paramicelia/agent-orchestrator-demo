@@ -1,0 +1,38 @@
+# Acme Corp — enterprise tenant.
+#
+# Full persona surface, both classifier and specialist agents on the smart
+# (70B) tier, year-long memory retention. This is the "white-glove" config
+# we hand to enterprise customers whose contract pays for top-tier quality
+# and long-lived personalisation.
+tenant_id: acme
+display_name: "Acme Corp"
+
+allowed_personas:
+  - neutral
+  - formal
+  - casual
+  - gen-z
+  - elderly-friendly
+default_persona: formal
+
+# No prompt overrides — Acme uses the built-in prompts. Override hooks are
+# left here as documentation for the next tenant that wants to brand the
+# specialist replies.
+agent_prompts: null
+
+model_tier:
+  classifier: lite
+  specialist: smart
+
+memory_retention_days: 365
+
+eval_thresholds:
+  intent_match: 0.70
+  helpfulness: 3.50
+  groundedness: 0.70
+  composite: 8.00
+
+metadata:
+  industry: enterprise_saas
+  region: us-east
+  contract_tier: gold

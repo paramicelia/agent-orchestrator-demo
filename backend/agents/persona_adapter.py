@@ -99,11 +99,35 @@ async def adapt(
 
 @traceable_node("persona_adapt")
 async def persona_adapt_node(state: AgentState, client: GroqClient) -> dict[str, Any]:
-    """LangGraph node wrapper."""
+    """LangGraph node wrapper.
+
+    Enforces the tenant persona allow-list: if ``state["tenant_config"]``
+    is present and the requested persona is not in the tenant's
+    ``allowed_personas`` list, we silently fall back to
+    ``tenant_config.default_persona`` and emit a trace line so the
+    decision is observable. Backward-compat: a state without a
+    ``tenant_config`` behaves exactly like the pre-multi-tenancy node.
+    """
     aggregated = state.get("aggregated_response", "")
-    persona = normalise_persona(state.get("persona"))
+    requested = normalise_persona(state.get("persona"))
+    tenant_cfg = state.get("tenant_config")
+    extra_trace: list[str] = []
+    if tenant_cfg is not None:
+        resolved = tenant_cfg.resolve_persona(requested)
+        if resolved != requested:
+            extra_trace.append(
+                f"persona_adapt: tenant={tenant_cfg.tenant_id} "
+                f"disallows persona={requested!r}, "
+                f"falling back to {resolved!r}"
+            )
+        persona = resolved
+    else:
+        persona = requested
     rewritten = await adapt(aggregated, persona, client)
     return {
         "final_response": rewritten,
-        "trace": [f"persona_adapt: {persona} -> {len(rewritten)} chars"],
+        "trace": [
+            *extra_trace,
+            f"persona_adapt: {persona} -> {len(rewritten)} chars",
+        ],
     }

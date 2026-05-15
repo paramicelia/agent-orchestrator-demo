@@ -16,6 +16,18 @@ class AgentState(TypedDict, total=False):
     message: str
     persona: str
 
+    # Multi-tenancy
+    # ``tenant_id`` is the id sent on the wire (defaults to "default" for
+    # backward-compat). ``tenant_config`` is the resolved, validated
+    # :class:`backend.tenants.TenantConfig` populated by
+    # ``load_tenant_node`` at graph entry; downstream nodes read
+    # tenant-specific overrides from it. Typed as ``Any`` here because
+    # LangGraph evaluates these annotations at runtime and we want to
+    # avoid a circular import (TenantConfig depends on persona_adapter
+    # which lives in this same package).
+    tenant_id: str
+    tenant_config: Any
+
     # Memory layer outputs
     memory_context: list[dict[str, Any]]
 

@@ -47,6 +47,12 @@ eval/_ci_smoke_out/
 # LangSmith local traces (never push these — they may leak prompts).
 langsmith_traces/
 
+# Tenant secrets (per-tenant API keys, credentials). Drop them in
+# tenants/_secrets/ and they stay out of git. The underscore prefix also
+# tells backend.tenants.loader to skip the file.
+tenants/_secrets/
+tenants/_disabled.yaml
+
 # IDE
 .idea/
 .vscode/

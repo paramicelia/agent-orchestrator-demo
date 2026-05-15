@@ -1,0 +1,46 @@
+# Kids-safe — child-friendly tenant for school deployments.
+#
+# Locked down to a single persona ("elderly-friendly" — which in this
+# codebase means simple words, short sentences, no slang — a great fit for
+# under-13 users too), both tiers downgraded to the lite 8B model to keep
+# per-seat cost negligible, 30-day memory retention to comply with strict
+# data-minimisation policies. Eval thresholds are tighter than the
+# enterprise default because a hallucination here is a much bigger
+# reputational problem than in Acme's B2B context.
+tenant_id: kids_safe
+display_name: "Kids Safe (school deployments)"
+
+allowed_personas:
+  - elderly-friendly
+default_persona: elderly-friendly
+
+agent_prompts:
+  topic_agent: |
+    You are the Topic Agent for a child-safe school product. Suggest 2-3
+    age-appropriate (ages 8-12) conversation starters, reading topics or
+    learning ideas. Use simple words. No politics, no violence, no adult
+    references. If the request is off-topic for a school context, gently
+    redirect to a safe alternative.
+  people_agent: |
+    You are the People Agent for a child-safe school product. Only suggest
+    ARCHETYPES of safe relationships a child might have ("a classmate you
+    share an interest with", "a teacher who knows the subject"). Never
+    invent first names or specific people. Stay age-appropriate.
+
+model_tier:
+  classifier: lite
+  specialist: lite
+
+memory_retention_days: 30
+
+eval_thresholds:
+  intent_match: 0.80
+  helpfulness: 4.00
+  groundedness: 0.90
+  composite: 8.50
+
+metadata:
+  industry: edtech
+  region: global
+  contract_tier: pilot
+  age_band: "8-12"

@@ -154,6 +154,107 @@ in both backends so a corpus indexed in one is re-ingestible into the other.
 
 ---
 
+## Multi-tenancy
+
+This is a single shared platform layer that serves many customers
+("tenants") at once. Each tenant's behaviour — persona allow-list,
+which agents run on smart vs. lite tier, per-tenant eval thresholds,
+memory-retention window — is configured by a **YAML file under
+`tenants/`**. Onboarding a new tenant is a YAML-only change: drop a
+file, restart, done. Zero code change.
+
+### Why multi-tenancy
+
+Production AI assistants almost always need to serve more than one
+brand / segment / contract tier from one codebase. The naive approach
+(if/elses scattered through agents) becomes a maintenance nightmare
+the moment the third tenant lands. The pattern here — a **core shared
+platform layer parameterised by config** — is what the ORIL JD calls
+out explicitly: "designing a core shared platform layer where new
+customers are onboarded via config-driven parameterization (YAML/JSON)
+without code changes."
+
+### Tenant YAML schema
+
+Minimal example:
+
+```yaml
+# tenants/newco.yaml
+tenant_id: newco
+display_name: "NewCo"
+allowed_personas: [neutral, formal, casual]
+default_persona: casual
+model_tier:
+  classifier: lite
+  specialist: smart
+memory_retention_days: 90
+eval_thresholds:
+  composite: 7.5
+```
+
+Full schema (with validators) is in
+[`backend/tenants/schemas.py`](backend/tenants/schemas.py). Unknown
+fields are rejected — a typo fails loudly at boot rather than silently
+mis-routing traffic.
+
+The repo ships three reference tenants:
+
+| Tenant | Personas | Tier | Retention | Why |
+|---|---|---|---|---|
+| `acme` | all 5 | smart everywhere | 365 days | Enterprise white-glove |
+| `zenith` | neutral / casual / gen-z | lite classifier + smart specialist | 90 days | Consumer startup, branded `event_agent` prompt |
+| `kids_safe` | elderly-friendly only | all-lite (cost-minimised) | 30 days | School deployments, tightest eval gates |
+
+### Onboarding flow
+
+```bash
+# 1. Drop a new YAML and validate it
+cp tenants/acme.yaml tenants/newco.yaml
+$EDITOR tenants/newco.yaml
+python -m backend.tenants.loader --validate tenants/newco.yaml
+
+# 2. Open a PR. CI runs the same validator across the whole directory
+#    plus the tenant test suite (tests/test_tenants.py).
+
+# 3. Merge + deploy. No code change.
+```
+
+Detailed runbook section: [`RUNBOOK.md` → "Onboard new tenant"](RUNBOOK.md#onboard-new-tenant).
+
+### What flows through `tenant_id` on the wire
+
+```bash
+curl -X POST localhost:8000/chat \
+  -H 'content-type: application/json' \
+  -d '{"user_id":"demo","tenant_id":"acme","message":"Plan my weekend.","persona":"formal"}'
+```
+
+- `tenant_id` defaults to `"default"` for backward compatibility with
+  the pre-multi-tenancy callers.
+- Unknown `tenant_id` silently falls back to the built-in default
+  tenant and emits a `trace` line — never 4xx's.
+- A request with a persona not in the tenant's `allowed_personas`
+  collapses to `tenant_config.default_persona` (also visible in trace).
+- Memory writes use `(tenant_id, user_id)` as the namespace key in
+  both Chroma and pgvector — Acme's memory is never returned to Zenith.
+
+Frontend (`frontend/index.html`) renders a tenant dropdown populated
+from `GET /tenants` and constrains the persona dropdown to whatever
+the selected tenant allows.
+
+---
+
+## Operations runbook
+
+Step-by-step deploy / rollback / tenant onboarding / incident-response
+procedures live in [`RUNBOOK.md`](RUNBOOK.md). It's structured so an
+on-call engineer with no prior exposure to this repo can execute
+deploys, rollbacks and common ops tasks without paging the original
+author — directly addressing the "deployment SOPs or runbooks that
+allow others to execute deployments without direct involvement" ask.
+
+---
+
 ## Quick start
 
 ### 1. Local (Python 3.11+)
@@ -422,11 +523,20 @@ agent-orchestrator-demo/
 │   │   └── schemas.py             ← OpenAI-compat tool schemas
 │   ├── memory/mem0_client.py      ← Chroma + sentence-transformers
 │   ├── llm/groq_client.py         ← async Groq wrapper + tiering + tools
-│   ├── api/routes.py              ← /chat /memory /healthz /reset /personas
+│   ├── api/routes.py              ← /chat /memory /healthz /reset /personas /tenants
 │   ├── observability.py           ← LangSmith opt-in tracing
+│   ├── tenants/                   ← YAML-driven multi-tenancy
+│   │   ├── schemas.py             ← TenantConfig (Pydantic v2)
+│   │   ├── loader.py              ← YAML loader + CLI validator
+│   │   └── defaults.py            ← built-in fallback tenant
 │   ├── config.py                  ← pydantic-settings
 │   └── main.py                    ← FastAPI app + lifespan
+├── tenants/                       ← per-tenant YAML configs (drop a file = onboard)
+│   ├── acme.yaml                  ← enterprise: all personas, smart tier
+│   ├── zenith.yaml                ← startup: narrow personas, branded event_agent
+│   └── kids_safe.yaml             ← school: elderly-friendly only, all-lite
 ├── frontend/index.html            ← single-file chat UI w/ tool & persona panels
+├── RUNBOOK.md                     ← deploy / rollback / onboarding / on-call SOPs
 ├── eval/
 │   ├── dataset.json               ← 10 fixed turns covering every path
 │   ├── judge.py                   ← LLM-as-judge scoring fn

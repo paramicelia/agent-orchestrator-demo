@@ -14,6 +14,15 @@ mem0-style wrapper directly on top of ``chromadb`` + ``sentence-transformers``:
 
 This matches the surface area of ``mem0.Memory`` while staying free, local
 and reproducible in CI.
+
+Multi-tenancy
+-------------
+All four methods accept an optional ``tenant_id`` keyword. When provided,
+the namespace key becomes ``{tenant_id}:{user_id}`` (stored in the
+``tenant`` + ``user_id`` metadata fields), so a memory written under one
+tenant is never returned to another. The legacy single-tenant key format
+is preserved when ``tenant_id`` is ``None`` or ``"default"`` so existing
+callers and stored data keep working unchanged.
 """
 
 from __future__ import annotations
@@ -30,6 +39,18 @@ from sentence_transformers import SentenceTransformer
 from backend.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+# Sentinel tenant id used for the pre-multi-tenancy code path. Memories
+# written without an explicit tenant_id collapse onto this so old data
+# stays reachable.
+_DEFAULT_TENANT = "default"
+
+
+def _normalise_tenant(tenant_id: str | None) -> str:
+    """Coerce ``None`` / empty string to the default-tenant sentinel."""
+    if not tenant_id or not tenant_id.strip():
+        return _DEFAULT_TENANT
+    return tenant_id.strip()
 
 
 class Mem0Client:
@@ -64,12 +85,30 @@ class Mem0Client:
         vectors = self._embedder.encode(texts, normalize_embeddings=True)
         return [v.tolist() for v in vectors]
 
-    def add(self, user_id: str, text: str, metadata: dict[str, Any] | None = None) -> str:
+    @staticmethod
+    def _where(user_id: str, tenant_id: str) -> dict[str, Any]:
+        """Chroma where-clause scoping queries to a single (tenant, user)."""
+        return {"$and": [{"user_id": user_id}, {"tenant": tenant_id}]}
+
+    def add(
+        self,
+        user_id: str,
+        text: str,
+        metadata: dict[str, Any] | None = None,
+        *,
+        tenant_id: str | None = None,
+    ) -> str:
         """Store one memory item for a user. Returns the memory id."""
         if not text.strip():
             raise ValueError("Memory text must be non-empty")
+        tenant = _normalise_tenant(tenant_id)
         mem_id = str(uuid.uuid4())
-        meta = {"user_id": user_id, "created_at": time.time(), **(metadata or {})}
+        meta = {
+            "user_id": user_id,
+            "tenant": tenant,
+            "created_at": time.time(),
+            **(metadata or {}),
+        }
         embedding = self._embed([text])[0]
         self._collection.add(
             ids=[mem_id],
@@ -77,18 +116,32 @@ class Mem0Client:
             embeddings=[embedding],
             metadatas=[meta],
         )
-        logger.debug("memory.add user=%s id=%s text=%r", user_id, mem_id, text[:80])
+        logger.debug(
+            "memory.add tenant=%s user=%s id=%s text=%r",
+            tenant,
+            user_id,
+            mem_id,
+            text[:80],
+        )
         return mem_id
 
-    def search(self, user_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
-        """Top-k semantic search scoped to a single user."""
+    def search(
+        self,
+        user_id: str,
+        query: str,
+        limit: int = 5,
+        *,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Top-k semantic search scoped to a single (tenant, user)."""
         if not query.strip():
             return []
+        tenant = _normalise_tenant(tenant_id)
         embedding = self._embed([query])[0]
         result = self._collection.query(
             query_embeddings=[embedding],
             n_results=limit,
-            where={"user_id": user_id},
+            where=self._where(user_id, tenant),
         )
         items: list[dict[str, Any]] = []
         ids = result.get("ids", [[]])[0]
@@ -106,9 +159,12 @@ class Mem0Client:
             )
         return items
 
-    def get_all(self, user_id: str) -> list[dict[str, Any]]:
-        """Return all memories for a user (for debug/demo)."""
-        result = self._collection.get(where={"user_id": user_id})
+    def get_all(
+        self, user_id: str, *, tenant_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Return all memories for a (tenant, user) (for debug/demo)."""
+        tenant = _normalise_tenant(tenant_id)
+        result = self._collection.get(where=self._where(user_id, tenant))
         items: list[dict[str, Any]] = []
         ids = result.get("ids", []) or []
         docs = result.get("documents", []) or []
@@ -119,9 +175,9 @@ class Mem0Client:
         items.sort(key=lambda x: x["metadata"].get("created_at", 0), reverse=True)
         return items
 
-    def reset(self, user_id: str) -> int:
-        """Delete every memory for the given user. Returns count removed."""
-        existing = self.get_all(user_id)
+    def reset(self, user_id: str, *, tenant_id: str | None = None) -> int:
+        """Delete every memory for the given (tenant, user). Returns count."""
+        existing = self.get_all(user_id, tenant_id=tenant_id)
         if not existing:
             return 0
         self._collection.delete(ids=[item["id"] for item in existing])

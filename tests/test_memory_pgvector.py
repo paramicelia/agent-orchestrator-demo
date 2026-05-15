@@ -133,14 +133,27 @@ def test_add_inserts_with_expected_columns(patched_client) -> None:
     assert len(conn.cursor_instances) == 2
     insert_sql, insert_params = conn.cursor_instances[1].executed[0]
     assert "INSERT INTO agent_memories" in insert_sql
-    assert "(id, user_id, text, embedding, metadata, created_at)" in insert_sql
-    # 6 bound params: id, user_id, text, embedding, metadata, created_at.
-    assert len(insert_params) == 6
-    assert insert_params[1] == "alice"
-    assert insert_params[2] == "Alice loves jazz"
-    assert isinstance(insert_params[3], list) and len(insert_params[3]) == 384
+    # Multi-tenancy: tenant comes right after id in the insert column list.
+    assert "(id, tenant, user_id, text, embedding, metadata, created_at)" in insert_sql
+    # 7 bound params: id, tenant, user_id, text, embedding, metadata, created_at.
+    assert len(insert_params) == 7
+    # No tenant_id keyword was passed -> falls back to "default" sentinel.
+    assert insert_params[1] == "default"
+    assert insert_params[2] == "alice"
+    assert insert_params[3] == "Alice loves jazz"
+    assert isinstance(insert_params[4], list) and len(insert_params[4]) == 384
     assert conn.committed is True
     assert conn.closed is True
+
+
+def test_add_inserts_with_explicit_tenant(patched_client) -> None:
+    """Passing tenant_id=… must propagate into the bind parameters."""
+    client, conn = patched_client
+    client.add("alice", "Alice loves jazz", tenant_id="acme")
+    insert_sql, insert_params = conn.cursor_instances[1].executed[0]
+    assert "INSERT INTO agent_memories" in insert_sql
+    assert insert_params[1] == "acme"
+    assert insert_params[2] == "alice"
 
 
 def test_schema_migration_runs_once(patched_client) -> None:
@@ -193,11 +206,16 @@ def test_search_scopes_by_user_and_orders_by_distance(patched_client) -> None:
     select_cur = conn.cursor_instances[-1]
     sql, params = select_cur.executed[0]
     assert "FROM agent_memories" in sql
-    assert "WHERE user_id = %s" in sql
+    # Multi-tenancy: scope by (tenant, user_id) — tenant comes first because
+    # it's the higher-cardinality discriminator.
+    assert "WHERE tenant = %s AND user_id = %s" in sql
     assert "embedding <=> %s" in sql
     assert "ORDER BY distance ASC" in sql
-    assert params[1] == "alice"
-    assert params[2] == 3
+    # params = (embedding, tenant, user_id, limit). No explicit tenant
+    # given -> "default" sentinel.
+    assert params[1] == "default"
+    assert params[2] == "alice"
+    assert params[3] == 3
 
     assert len(results) == 2
     # 1 - distance => higher score for closer match
@@ -245,7 +263,7 @@ def test_get_all_orders_newest_first(patched_client) -> None:
 
     select_cur = conn.cursor_instances[-1]
     sql, _ = select_cur.executed[0]
-    assert "WHERE user_id = %s" in sql
+    assert "WHERE tenant = %s AND user_id = %s" in sql
     assert "ORDER BY created_at DESC" in sql
     assert [i["text"] for i in items] == ["newer", "older"]
 
@@ -276,8 +294,10 @@ def test_reset_returns_rowcount(patched_client) -> None:
     delete_cur = conn.cursor_instances[-1]
     sql, params = delete_cur.executed[0]
     assert "DELETE FROM agent_memories" in sql
-    assert "WHERE user_id = %s" in sql
-    assert params[0] == "alice"
+    assert "WHERE tenant = %s AND user_id = %s" in sql
+    # No tenant_id passed -> default sentinel, then user_id.
+    assert params[0] == "default"
+    assert params[1] == "alice"
     assert conn.committed is True
 
 

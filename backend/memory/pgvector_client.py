@@ -18,7 +18,9 @@ Design notes
   inside an idempotent ``CREATE TABLE IF NOT EXISTS`` + ``CREATE INDEX IF
   NOT EXISTS`` block, so this client is safe to swap in on a fresh database.
 * Multi-tenancy is enforced at the query layer: every read or write is
-  scoped by ``user_id`` exactly like the Chroma backend.
+  scoped by ``(tenant, user_id)`` exactly like the Chroma backend. The
+  ``tenant`` column has a ``DEFAULT 'default'`` so a single-tenant deploy
+  that ignores the new keyword keeps writing readable rows.
 * Distance is cosine (``<=>``) and we expose it as ``score = 1.0 - distance``
   to keep the return-shape identical to ``Mem0Client.search``.
 
@@ -47,6 +49,17 @@ logger = logging.getLogger(__name__)
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 SCHEMA_MIGRATION = MIGRATIONS_DIR / "001_memories_pgvector.sql"
+
+# Sentinel tenant id used for the pre-multi-tenancy code path. Memories
+# written without an explicit tenant_id collapse onto this so existing
+# rows (and callers that don't pass tenant_id) stay reachable.
+_DEFAULT_TENANT = "default"
+
+
+def _normalise_tenant(tenant_id: str | None) -> str:
+    if not tenant_id or not tenant_id.strip():
+        return _DEFAULT_TENANT
+    return tenant_id.strip()
 
 
 class PgVectorClient:
@@ -116,13 +129,26 @@ class PgVectorClient:
 
     # ----- public API (mirrors Mem0Client) ----------------------------- #
 
-    def add(self, user_id: str, text: str, metadata: dict[str, Any] | None = None) -> str:
+    def add(
+        self,
+        user_id: str,
+        text: str,
+        metadata: dict[str, Any] | None = None,
+        *,
+        tenant_id: str | None = None,
+    ) -> str:
         """Store one memory item for a user. Returns the memory id."""
         if not text.strip():
             raise ValueError("Memory text must be non-empty")
+        tenant = _normalise_tenant(tenant_id)
         mem_id = str(uuid.uuid4())
         created_at = time.time()
-        meta = {"user_id": user_id, "created_at": created_at, **(metadata or {})}
+        meta = {
+            "user_id": user_id,
+            "tenant": tenant,
+            "created_at": created_at,
+            **(metadata or {}),
+        }
         embedding = self._embed([text])[0]
 
         conn = self._connect()
@@ -131,20 +157,42 @@ class PgVectorClient:
             with conn.cursor() as cur:
                 cur.execute(
                     f"INSERT INTO {self.TABLE_NAME} "
-                    "(id, user_id, text, embedding, metadata, created_at) "
-                    "VALUES (%s, %s, %s, %s, %s, to_timestamp(%s))",
-                    (mem_id, user_id, text, embedding, psycopg.types.json.Jsonb(meta), created_at),
+                    "(id, tenant, user_id, text, embedding, metadata, created_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, to_timestamp(%s))",
+                    (
+                        mem_id,
+                        tenant,
+                        user_id,
+                        text,
+                        embedding,
+                        psycopg.types.json.Jsonb(meta),
+                        created_at,
+                    ),
                 )
             conn.commit()
         finally:
             conn.close()
-        logger.debug("pgvector.add user=%s id=%s text=%r", user_id, mem_id, text[:80])
+        logger.debug(
+            "pgvector.add tenant=%s user=%s id=%s text=%r",
+            tenant,
+            user_id,
+            mem_id,
+            text[:80],
+        )
         return mem_id
 
-    def search(self, user_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
-        """Top-k cosine similarity search scoped to a single user."""
+    def search(
+        self,
+        user_id: str,
+        query: str,
+        limit: int = 5,
+        *,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Top-k cosine similarity search scoped to a single (tenant, user)."""
         if not query.strip():
             return []
+        tenant = _normalise_tenant(tenant_id)
         embedding = self._embed([query])[0]
         conn = self._connect()
         try:
@@ -153,10 +201,10 @@ class PgVectorClient:
                 cur.execute(
                     f"SELECT id, text, metadata, embedding <=> %s AS distance "
                     f"FROM {self.TABLE_NAME} "
-                    "WHERE user_id = %s "
+                    "WHERE tenant = %s AND user_id = %s "
                     "ORDER BY distance ASC "
                     "LIMIT %s",
-                    (embedding, user_id, int(limit)),
+                    (embedding, tenant, user_id, int(limit)),
                 )
                 rows = cur.fetchall()
         finally:
@@ -175,17 +223,20 @@ class PgVectorClient:
             )
         return items
 
-    def get_all(self, user_id: str) -> list[dict[str, Any]]:
-        """Return every memory for a user, newest first."""
+    def get_all(
+        self, user_id: str, *, tenant_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Return every memory for a (tenant, user), newest first."""
+        tenant = _normalise_tenant(tenant_id)
         conn = self._connect()
         try:
             self._ensure_schema(conn)
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT id, text, metadata FROM {self.TABLE_NAME} "
-                    "WHERE user_id = %s "
+                    "WHERE tenant = %s AND user_id = %s "
                     "ORDER BY created_at DESC",
-                    (user_id,),
+                    (tenant, user_id),
                 )
                 rows = cur.fetchall()
         finally:
@@ -195,15 +246,16 @@ class PgVectorClient:
             for row in rows
         ]
 
-    def reset(self, user_id: str) -> int:
-        """Delete every memory for the given user. Returns count removed."""
+    def reset(self, user_id: str, *, tenant_id: str | None = None) -> int:
+        """Delete every memory for the given (tenant, user). Returns count removed."""
+        tenant = _normalise_tenant(tenant_id)
         conn = self._connect()
         try:
             self._ensure_schema(conn)
             with conn.cursor() as cur:
                 cur.execute(
-                    f"DELETE FROM {self.TABLE_NAME} WHERE user_id = %s",
-                    (user_id,),
+                    f"DELETE FROM {self.TABLE_NAME} WHERE tenant = %s AND user_id = %s",
+                    (tenant, user_id),
                 )
                 removed = cur.rowcount
             conn.commit()

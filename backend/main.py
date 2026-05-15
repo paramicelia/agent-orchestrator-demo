@@ -31,6 +31,7 @@ from backend.config import get_settings  # noqa: E402
 from backend.llm.groq_client import GroqClient  # noqa: E402
 from backend.memory import build_memory_client  # noqa: E402
 from backend.observability import init_tracing  # noqa: E402
+from backend.tenants import load_all_tenants  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +48,20 @@ async def lifespan(app: FastAPI):
     init_tracing()
     client = GroqClient()
     memory = build_memory_client()
+    # Load tenant YAML configs from the top-level tenants/ directory.
+    # Boot-time failure here is preferred over silent fallback: a typo in
+    # a tenant config should fail loudly.
+    tenants_dir = Path(__file__).resolve().parent.parent / "tenants"
+    tenant_registry = load_all_tenants(tenants_dir)
     app.state.client = client
     app.state.memory = memory
-    app.state.graph = build_graph(client, memory)
-    logger.info("Graph compiled — ready")
+    app.state.tenant_registry = tenant_registry
+    app.state.graph = build_graph(client, memory, tenant_registry=tenant_registry)
+    logger.info(
+        "Graph compiled — ready (%d tenants: %s)",
+        len(tenant_registry),
+        ", ".join(sorted(tenant_registry.keys())),
+    )
     yield
     logger.info("Shutting down")
 

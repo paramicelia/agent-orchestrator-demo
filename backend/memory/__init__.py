@@ -27,20 +27,34 @@ class MemoryClient(Protocol):
     """Structural type both backends satisfy.
 
     Exists so callers (supervisor, eval, tests) can rely on the shape
-    without importing a concrete class.
+    without importing a concrete class. The ``tenant_id`` keyword is
+    optional and defaults to ``"default"`` for backward compatibility
+    with the pre-multi-tenancy callers.
     """
 
     def add(
-        self, user_id: str, text: str, metadata: dict[str, Any] | None = ...
+        self,
+        user_id: str,
+        text: str,
+        metadata: dict[str, Any] | None = ...,
+        *,
+        tenant_id: str | None = ...,
     ) -> str: ...
 
     def search(
-        self, user_id: str, query: str, limit: int = ...
+        self,
+        user_id: str,
+        query: str,
+        limit: int = ...,
+        *,
+        tenant_id: str | None = ...,
     ) -> list[dict[str, Any]]: ...
 
-    def get_all(self, user_id: str) -> list[dict[str, Any]]: ...
+    def get_all(
+        self, user_id: str, *, tenant_id: str | None = ...
+    ) -> list[dict[str, Any]]: ...
 
-    def reset(self, user_id: str) -> int: ...
+    def reset(self, user_id: str, *, tenant_id: str | None = ...) -> int: ...
 
 
 def build_memory_client(backend: str | None = None) -> MemoryClient:

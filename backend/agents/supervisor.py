@@ -3,11 +3,11 @@
 Topology
 --------
 
-    load_memory ─► classify_intent ─► topic_agent  ──┐
-                                  └►  people_agent ──┼─► aggregate ─► persona_adapt ─► save_memory ─► END
-                                  └►  event_agent  ──┘
-                                       (tool-use loop:
-                                        search_events / book_event)
+    load_tenant ─► load_memory ─► classify_intent ─► topic_agent  ──┐
+                                                  └►  people_agent ──┼─► aggregate ─► persona_adapt ─► save_memory ─► END
+                                                  └►  event_agent  ──┘
+                                                       (tool-use loop:
+                                                        search_events / book_event)
 
 The conditional edge after ``classify_intent`` fans out to 1..3 specialists
 based on the intent classifier's ``selected_agents``. Each specialist appends
@@ -15,6 +15,11 @@ to ``agent_outputs`` (reducer = ``operator.add``). Aggregate fans them back
 into ``aggregated_response``. ``persona_adapt`` rewrites the text in the
 requested tone and writes ``final_response``. ``save_memory`` persists a
 single takeaway to mem0.
+
+``load_tenant`` runs first and resolves ``state["tenant_id"]`` into a
+:class:`TenantConfig` stored in ``state["tenant_config"]``. Unknown tenant
+ids transparently fall back to the built-in default tenant, with a trace
+line so the choice is observable.
 """
 
 from __future__ import annotations
@@ -35,8 +40,57 @@ from backend.agents import (
 from backend.agents.state import AgentState
 from backend.llm.groq_client import GroqClient
 from backend.memory import MemoryClient
+from backend.tenants import DEFAULT_TENANT, DEFAULT_TENANT_ID, TenantRegistry
 
 logger = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------- #
+# Tenant node
+# --------------------------------------------------------------------------- #
+
+
+def make_load_tenant_node(registry: TenantRegistry | None):
+    """Build the entry-point node that resolves ``tenant_id`` -> ``tenant_config``.
+
+    ``registry`` may be ``None`` (caller has no multi-tenant setup yet) or
+    a dict produced by :func:`backend.tenants.load_all_tenants`. Either
+    way, the node guarantees ``state["tenant_config"]`` is populated after
+    it runs, falling back to the built-in default tenant on unknown ids.
+    """
+
+    async def load_tenant_node(state: AgentState) -> dict[str, Any]:
+        requested = state.get("tenant_id") or DEFAULT_TENANT_ID
+        cfg = None
+        if registry is not None:
+            cfg = registry.get(requested)
+        if cfg is None:
+            if requested != DEFAULT_TENANT_ID:
+                logger.warning(
+                    "tenant.load: unknown tenant_id=%r — falling back to default",
+                    requested,
+                )
+                trace_line = (
+                    f"tenant.load: unknown tenant_id={requested!r} -> default"
+                )
+            else:
+                trace_line = "tenant.load: default tenant"
+            cfg = DEFAULT_TENANT
+            resolved_id = DEFAULT_TENANT_ID
+        else:
+            resolved_id = cfg.tenant_id
+            trace_line = (
+                f"tenant.load: {resolved_id} "
+                f"(personas={cfg.allowed_personas}, "
+                f"tier={cfg.model_tier})"
+            )
+        return {
+            "tenant_id": resolved_id,
+            "tenant_config": cfg,
+            "trace": [trace_line],
+        }
+
+    return load_tenant_node
 
 
 # --------------------------------------------------------------------------- #
@@ -46,10 +100,16 @@ logger = logging.getLogger(__name__)
 
 def make_load_memory_node(memory: MemoryClient):
     async def load_memory_node(state: AgentState) -> dict[str, Any]:
-        hits = memory.search(state["user_id"], state["message"], limit=5)
+        tenant_id = state.get("tenant_id") or DEFAULT_TENANT_ID
+        hits = memory.search(
+            state["user_id"], state["message"], limit=5, tenant_id=tenant_id
+        )
         return {
             "memory_context": hits,
-            "trace": [f"memory.load: {len(hits)} hits for user={state['user_id']}"],
+            "trace": [
+                f"memory.load: {len(hits)} hits for "
+                f"tenant={tenant_id} user={state['user_id']}"
+            ],
         }
 
     return load_memory_node
@@ -66,6 +126,7 @@ def make_save_memory_node(memory: MemoryClient, client: GroqClient):
     )
 
     async def save_memory_node(state: AgentState) -> dict[str, Any]:
+        tenant_id = state.get("tenant_id") or DEFAULT_TENANT_ID
         turn = (
             f"User: {state['message']}\n"
             f"Assistant: {state.get('final_response', '')}"
@@ -79,7 +140,12 @@ def make_save_memory_node(memory: MemoryClient, client: GroqClient):
         if not fact or fact.upper().startswith("SKIP"):
             return {"trace": ["memory.save: skipped (nothing notable)"]}
         try:
-            memory.add(state["user_id"], fact, metadata={"source": "auto_extract"})
+            memory.add(
+                state["user_id"],
+                fact,
+                metadata={"source": "auto_extract"},
+                tenant_id=tenant_id,
+            )
             return {"trace": [f"memory.save: stored fact ({len(fact)} chars)"]}
         except Exception as exc:  # noqa: BLE001
             logger.warning("save_memory: add failed: %s", exc)
@@ -113,8 +179,18 @@ def route_to_agents(state: AgentState) -> list[str]:
 # --------------------------------------------------------------------------- #
 
 
-def build_graph(client: GroqClient, memory: MemoryClient):
-    """Compile and return a runnable LangGraph supervisor."""
+def build_graph(
+    client: GroqClient,
+    memory: MemoryClient,
+    tenant_registry: TenantRegistry | None = None,
+):
+    """Compile and return a runnable LangGraph supervisor.
+
+    ``tenant_registry`` is the dict produced by
+    :func:`backend.tenants.load_all_tenants`. Passing ``None`` keeps the
+    pre-multi-tenancy behaviour — the load_tenant node still runs but
+    every request resolves to the built-in default tenant.
+    """
     graph = StateGraph(AgentState)
 
     # Bind dependencies into node callables.
@@ -136,6 +212,7 @@ def build_graph(client: GroqClient, memory: MemoryClient):
     async def persona_node(state: AgentState) -> dict[str, Any]:
         return await persona_adapter.persona_adapt_node(state, client)
 
+    graph.add_node("load_tenant", make_load_tenant_node(tenant_registry))
     graph.add_node("load_memory", make_load_memory_node(memory))
     graph.add_node("classify_intent", classify_node)
     graph.add_node("topic_agent", topic_node)
@@ -145,7 +222,8 @@ def build_graph(client: GroqClient, memory: MemoryClient):
     graph.add_node("persona_adapt", persona_node)
     graph.add_node("save_memory", make_save_memory_node(memory, client))
 
-    graph.set_entry_point("load_memory")
+    graph.set_entry_point("load_tenant")
+    graph.add_edge("load_tenant", "load_memory")
     graph.add_edge("load_memory", "classify_intent")
 
     graph.add_conditional_edges(
