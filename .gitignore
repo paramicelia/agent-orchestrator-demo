@@ -42,6 +42,10 @@ chroma_db/
 # the per-turn JSON dump is not (it captures full reply transcripts and
 # would bloat the repo on every run).
 eval/results.json
+eval/_ci_smoke_out/
+
+# LangSmith local traces (never push these — they may leak prompts).
+langsmith_traces/
 
 # IDE
 .idea/

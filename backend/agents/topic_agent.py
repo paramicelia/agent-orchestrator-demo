@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from backend.agents.state import AgentState
 from backend.llm.groq_client import GroqClient
+from backend.observability import traceable_node
 
 NAME = "topic"
 
@@ -38,10 +40,14 @@ async def run(message: str, memory_context: list[dict[str, Any]], client: GroqCl
     return await client.smart(prompt, system=SYSTEM_PROMPT, temperature=0.6, max_tokens=400)
 
 
+@traceable_node("topic_agent")
 async def topic_agent_node(state: AgentState, client: GroqClient) -> dict[str, Any]:
     """LangGraph node wrapper."""
+    loop = asyncio.get_event_loop()
+    t0 = loop.time()
     text = await run(state["message"], state.get("memory_context", []), client)
+    elapsed_ms = int((loop.time() - t0) * 1000)
     return {
         "agent_outputs": [{"agent": NAME, "content": text}],
-        "trace": [f"agent:{NAME} produced {len(text)} chars"],
+        "trace": [f"agent:{NAME} produced {len(text)} chars in {elapsed_ms}ms"],
     }

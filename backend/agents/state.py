@@ -38,3 +38,9 @@ class AgentState(TypedDict, total=False):
 
     # Bookkeeping
     trace: Annotated[list[str], operator.add]
+
+    # Per-node latency log emitted by `backend.observability.traceable_node`.
+    # Each entry: {"name": "<node_name>", "ms": <int>}. List rather than dict
+    # so the operator.add reducer can merge fan-out branches without losing
+    # entries.
+    node_latencies: Annotated[list[dict[str, Any]], operator.add]

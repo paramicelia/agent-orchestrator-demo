@@ -29,7 +29,7 @@ from backend.agents.supervisor import build_graph  # noqa: E402
 from backend.api.routes import router as api_router  # noqa: E402
 from backend.config import get_settings  # noqa: E402
 from backend.llm.groq_client import GroqClient  # noqa: E402
-from backend.memory.mem0_client import Mem0Client  # noqa: E402
+from backend.memory import build_memory_client  # noqa: E402
 from backend.observability import init_tracing  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -43,10 +43,10 @@ async def lifespan(app: FastAPI):
         level=settings.app_log_level.upper(),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    logger.info("Starting agent-orchestrator-demo")
+    logger.info("Starting agent-orchestrator-demo (memory_backend=%s)", settings.memory_backend)
     init_tracing()
     client = GroqClient()
-    memory = Mem0Client()
+    memory = build_memory_client()
     app.state.client = client
     app.state.memory = memory
     app.state.graph = build_graph(client, memory)

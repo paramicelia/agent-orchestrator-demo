@@ -35,6 +35,10 @@ class ChatResponse(BaseModel):
     agent_outputs: list[dict[str, Any]]
     tool_calls: list[dict[str, Any]]
     trace: list[str]
+    # Per-node wall-clock latencies, injected by
+    # `backend.observability.traceable_node`. Frontend renders these as a
+    # breakdown so a slow turn can be diagnosed without leaving the page.
+    node_latencies: list[dict[str, Any]] = []
 
 
 class MemoryItem(BaseModel):
@@ -93,6 +97,7 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
         agent_outputs=result.get("agent_outputs", []),
         tool_calls=result.get("tool_calls", []),
         trace=result.get("trace", []),
+        node_latencies=result.get("node_latencies", []),
     )
 
 

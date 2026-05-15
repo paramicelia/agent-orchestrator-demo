@@ -19,12 +19,14 @@ trail and the eval harness can verify groundedness.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
 
 from backend.agents.state import AgentState
 from backend.llm.groq_client import GroqClient
+from backend.observability import _traceable, traceable_node
 from backend.tools import TOOL_SCHEMAS, handle_tool_call
 
 logger = logging.getLogger(__name__)
@@ -120,6 +122,7 @@ def _build_user_message(message: str, memory_context: list[dict[str, Any]], user
     return f"{mem_block}user_id: {user_id}\nUser message: {message}"
 
 
+@_traceable(name="event_agent.run_with_tools", run_type="chain")
 async def run_with_tools(
     message: str,
     memory_context: list[dict[str, Any]],
@@ -258,16 +261,20 @@ async def run_with_tools(
     return wrap.get("content") or "Try one of the options above.", tool_log
 
 
+@traceable_node("event_agent")
 async def event_agent_node(state: AgentState, client: GroqClient) -> dict[str, Any]:
     """LangGraph node wrapper."""
+    loop = asyncio.get_event_loop()
+    t0 = loop.time()
     text, tool_log = await run_with_tools(
         state["message"],
         state.get("memory_context", []),
         state.get("user_id", "anonymous"),
         client,
     )
+    elapsed_ms = int((loop.time() - t0) * 1000)
     trace = [
-        f"agent:{NAME} produced {len(text)} chars, used {len(tool_log)} tool calls"
+        f"agent:{NAME} produced {len(text)} chars, used {len(tool_log)} tool calls in {elapsed_ms}ms"
     ]
     for entry in tool_log:
         trace.append(f"  tool:{entry['name']} args={entry['arguments']}")

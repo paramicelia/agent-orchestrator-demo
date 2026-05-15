@@ -136,6 +136,10 @@
         <div id="memory-panel"><span class="empty">no run yet</span></div>
       </section>
       <section>
+        <h2>Node latencies</h2>
+        <div id="latency-panel"><span class="empty">no run yet</span></div>
+      </section>
+      <section>
         <h2>Trace</h2>
         <div id="trace-panel"><span class="empty">no run yet</span></div>
       </section>
@@ -197,6 +201,17 @@
       if (!lines || lines.length === 0) { panel.innerHTML = '<span class="empty">empty</span>'; return; }
       panel.innerHTML = lines.map(l => `<div class="trace-item">${l}</div>`).join("");
     }
+    function renderLatencies(entries) {
+      const panel = $("latency-panel");
+      if (!entries || entries.length === 0) { panel.innerHTML = '<span class="empty">no run yet</span>'; return; }
+      const total = entries.reduce((acc, e) => acc + (e.ms || 0), 0);
+      const rows = entries
+        .slice()
+        .sort((a, b) => (b.ms || 0) - (a.ms || 0))
+        .map(e => `<div class="trace-item">${e.name}: <b>${e.ms}ms</b></div>`)
+        .join("");
+      panel.innerHTML = rows + `<div class="trace-item" style="margin-top:6px"><b>total: ${total}ms</b></div>`;
+    }
 
     async function send() {
       const user_id = userIdInput.value.trim() || "demo_user";
@@ -228,6 +243,7 @@
         renderAgents(data.selected_agents);
         renderTools(data.tool_calls);
         renderMemory(data.memory_used);
+        renderLatencies(data.node_latencies);
         renderTrace(data.trace);
       } catch (e) {
         addMsg("error", "Network error: " + e.message);

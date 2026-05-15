@@ -6,6 +6,7 @@ from typing import Any
 
 from backend.agents.state import AgentState
 from backend.llm.groq_client import GroqClient
+from backend.observability import traceable_node
 
 SYSTEM_PROMPT = """You are the final response writer for a social concierge.
 
@@ -55,6 +56,7 @@ async def aggregate(
     return await client.smart(prompt, system=SYSTEM_PROMPT, temperature=0.5, max_tokens=500)
 
 
+@traceable_node("aggregator")
 async def aggregator_node(state: AgentState, client: GroqClient) -> dict[str, Any]:
     text = await aggregate(state["message"], state.get("agent_outputs", []), client)
     return {

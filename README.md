@@ -3,6 +3,7 @@
 [![CI](https://github.com/paramicelia/agent-orchestrator-demo/actions/workflows/ci.yml/badge.svg)](https://github.com/paramicelia/agent-orchestrator-demo/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org)
 [![Eval](https://img.shields.io/badge/eval-8.3%2F10-brightgreen.svg)](eval/results.md)
+[![Smoke-eval gate](https://img.shields.io/badge/smoke--eval-gating-blue.svg)](.github/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 > A production-shaped **multi-agent chat system** that closes the gap between
@@ -87,7 +88,7 @@ are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 | LLM provider | **Groq** | Cheapest 8B + competitive 70B |
 | Lite tier | `llama-3.1-8b-instant` | Intent routing, memory extraction, persona rewrite |
 | Smart tier | `llama-3.3-70b-versatile` | Specialist agents + aggregator + LLM judge |
-| Long-term memory | **Chroma + sentence-transformers** | Local persistence, no paid embeddings, mem0-style API |
+| Long-term memory | **Chroma + sentence-transformers** (default) or **Postgres + pgvector** | Local persistence by default, swap to pgvector with one env var for prod |
 | API | **FastAPI** async + Pydantic v2 | Type-safe, OpenAPI for free |
 | Container | Multi-stage **Dockerfile** + `docker-compose.yml` | Reproducible runtime |
 | Eval | **LLM-as-judge** over fixed dataset | Reproducible quality bar, runs locally on demand |
@@ -100,6 +101,56 @@ are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 > sentence-transformers (`backend/memory/mem0_client.py`). API surface
 > (`add` / `search` / `get_all` / `reset`) matches `mem0.Memory` so swapping
 > back to the SDK is a one-import change.
+
+---
+
+## Memory backends
+
+Two interchangeable backends ship in `backend/memory/`. Both implement the
+same `add` / `search` / `get_all` / `reset` surface (see
+[`MemoryClient`](backend/memory/__init__.py) Protocol).
+
+| Backend | Module | When to pick it |
+|---|---|---|
+| **Chroma** (default) | `backend/memory/mem0_client.py` | Local-first, zero infra. Best for the demo, local dev, and small single-process deployments. |
+| **pgvector** | `backend/memory/pgvector_client.py` | Production. Pick this when the host already runs Postgres for app data and a second vector database isn't worth the operational cost. |
+
+Swap is **one env var**:
+
+```bash
+# Chroma (default)
+MEMORY_BACKEND=chroma
+
+# Postgres + pgvector
+MEMORY_BACKEND=pgvector
+POSTGRES_DSN=postgresql://agent:agent@localhost:5432/agent_demo
+```
+
+The pgvector schema (`agent_memories` table, 384-dim vector column, IVF-Flat
+cosine index, b-tree on `user_id`) is in
+[`backend/memory/migrations/001_memories_pgvector.sql`](backend/memory/migrations/001_memories_pgvector.sql)
+and is applied idempotently on the first call after process start.
+
+### Boot pgvector locally
+
+```bash
+# Start Postgres + pgvector on :5432
+docker compose -f compose.pgvector.yml up -d
+
+# Run the app on the host against it
+export MEMORY_BACKEND=pgvector
+export POSTGRES_DSN=postgresql://agent:agent@localhost:5432/agent_demo
+make dev
+```
+
+Or run app + DB together inside the docker network:
+
+```bash
+docker compose -f compose.pgvector.yml --profile app up --build
+```
+
+Embeddings stay on `sentence-transformers/all-MiniLM-L6-v2` (384-dim, cosine)
+in both backends so a corpus indexed in one is re-ingestible into the other.
 
 ---
 
@@ -227,6 +278,30 @@ Current shipped score: **8.3 / 10** composite. CI runs
 `tests/test_eval_smoke.py` with mocked Groq calls instead, so no quota is
 spent in GitHub Actions.
 
+### CI gating: smoke-eval
+
+Beyond the standard unit + integration suite, every PR has to clear a
+separate **smoke-eval gate** step in `.github/workflows/ci.yml`:
+
+```yaml
+- name: Smoke-eval gate
+  env:
+    GROQ_API_KEY: "test-key-not-used"
+  run: pytest tests/test_eval_smoke_ci.py -v
+```
+
+`tests/test_eval_smoke_ci.py` exercises the eval framework end-to-end with
+a fully mocked Groq client and a redirected results path. It asserts:
+
+1. `eval/dataset.json` parses, has >=10 turns, and every turn has the
+   contract fields the runner depends on.
+2. `judge_response` returns `{helpfulness: int 1..5, groundedness: float 0..1, reason: str}`.
+3. `run_eval.main()` end-to-end produces a `results.json` whose
+   `summary` + per-turn entries match the schema the README publishes.
+
+This is what makes the eval harness load-bearing — a dataset typo or a
+silent schema regression fails CI before it can ship.
+
 ### Latest results
 
 | ID | Category | Expected | Actual | Intent | Helpful | Ground | Composite |
@@ -246,10 +321,50 @@ Full per-turn breakdown including tool calls and judge reasoning: [`eval/results
 
 ---
 
-## Observability (LangSmith)
+## Observability — node-level tracing for multi-step workflows
 
-LangSmith tracing is opt-in. The default `.env.example` ships with it
-disabled so the demo runs anywhere.
+Two layers ship out of the box, both controlled by
+[`backend/observability.py`](backend/observability.py):
+
+### 1. Per-node latency in the response (always on)
+
+Every async LangGraph node is wrapped with `@traceable_node("<name>")` which:
+
+* measures wall-clock latency around the inner call
+* appends a structured `{"name": "<node>", "ms": <int>}` entry to a new
+  `node_latencies` field on `AgentState`
+* appends a human-readable line to the existing `trace` list, e.g.
+  `node:event_agent took 1820ms`
+* each specialist also embeds the timing directly in its trace string so the
+  side-panel UI shows `agent:event produced 412 chars, used 1 tool calls in 1820ms`.
+
+The `/chat` response now carries `node_latencies` alongside `trace`, and the
+frontend side panel renders an aggregate breakdown so a slow turn is
+diagnosable without leaving the page.
+
+**Example trace from one turn:**
+
+```text
+memory.load: 1 hits for user=demo
+node:intent_classifier took 124ms
+intent=['event'] reason=user asked for a specific event with city
+node:event_agent took 1820ms
+agent:event produced 412 chars, used 1 tool calls in 1820ms
+  tool:search_events args={'query': 'jazz', 'location': 'New York'}
+node:aggregator took 612ms
+aggregate: 1 drafts -> 287 chars
+node:persona_adapt took 0ms
+persona_adapt: neutral -> 287 chars
+node:save_memory took 184ms
+memory.save: stored fact (47 chars)
+```
+
+### 2. LangSmith export (opt-in)
+
+`@traceable_node` also wraps each node with `langsmith.traceable(run_type="chain")`,
+so when LangSmith is configured the full per-node call tree (including the
+inner `event_agent.run_with_tools` tool-use loop) is exported to the cloud
+dashboard. Without a key, the decorator is a clean no-op.
 
 To enable:
 
@@ -260,10 +375,18 @@ LANGSMITH_API_KEY=lsv2_pt_...
 LANGSMITH_PROJECT=agent-orchestrator-demo
 ```
 
-`backend/observability.py` propagates these into the process environment
-on startup; the LangChain callback manager auto-instruments every node
-in the LangGraph supervisor. With no key set, `init_tracing()` returns
-`False` and is a complete no-op — local runs and CI never hit the network.
+`init_tracing()` propagates these into the process environment on startup
+so the LangChain callback manager auto-instruments every node. With no key
+set, both the env-var bootstrap and every `@traceable_node` decorator
+no-op — local runs and CI never hit the network.
+
+> Want a screenshot of the LangSmith trace tree? Wire your key, hit `/chat`
+> once, then check the LangSmith console for the run named
+> `LangGraph` with child runs `intent_classifier` →
+> `topic_agent / people_agent / event_agent` → `aggregator` →
+> `persona_adapt`. See
+> [`screenshots/01-chat-ui.png`](screenshots/01-chat-ui.png) for the local
+> side-panel rendering of `node_latencies`.
 
 ---
 
@@ -309,7 +432,7 @@ agent-orchestrator-demo/
 │   ├── judge.py                   ← LLM-as-judge scoring fn
 │   ├── run_eval.py                ← async runner → results.json + .md
 │   └── results.md                 ← latest eval table
-├── tests/                         ← 68 unit tests, all mocked
+├── tests/                         ← 90+ unit tests, all mocked (incl. pgvector + smoke-eval gate)
 ├── scripts/smoke_demo.py          ← runnable 3-turn demo
 ├── Dockerfile + docker-compose.yml
 ├── Makefile                       ← make {dev,test,lint,eval,smoke,...}
@@ -324,7 +447,7 @@ agent-orchestrator-demo/
 make test          # or: pytest tests/ -v
 ```
 
-68 unit tests, all mocked. The eval **smoke** test (`test_eval_smoke.py`)
+90+ unit tests, all mocked. The eval **smoke** test (`test_eval_smoke.py`)
 runs three hardcoded turns through the graph with a mocked Groq client and
 the mocked judge, validating the full scoring pipeline without touching
 the network. The full LLM-as-judge eval is reserved for `make eval`.
@@ -333,14 +456,16 @@ Coverage by file:
 
 - `test_intent_classifier.py` — single / multi / unknown / empty / malformed.
 - `test_supervisor_graph.py` — topology, fan-out end-to-end.
-- `test_memory.py` — per-user scoping, ordering, reset, empty rejection.
+- `test_memory.py` — per-user scoping, ordering, reset, empty rejection (Chroma).
+- `test_memory_pgvector.py` — pgvector SQL contract + schema migration with mocked psycopg.
 - `test_aggregator.py` — empty / single / multi-draft merge.
 - `test_api.py` — all endpoints + persona validation.
 - `test_tools.py` — Pydantic schemas, dispatch, filtering, caps.
 - `test_event_agent_tool_use.py` — full tool-use loop + recovery paths.
 - `test_persona_adapter.py` — neutral no-op + each persona rewrite.
-- `test_observability.py` — LangSmith init gating.
+- `test_observability.py` — LangSmith init gating + `traceable_node` latency injection.
 - `test_eval_smoke.py` — end-to-end scoring with mocked Groq.
+- `test_eval_smoke_ci.py` — **CI gating step** — dataset schema + judge contract + run_eval results.json schema.
 
 ---
 

@@ -22,8 +22,12 @@ class Settings(BaseSettings):
     groq_lite_model: str = "llama-3.1-8b-instant"
 
     # Memory
+    memory_backend: str = "chroma"  # "chroma" or "pgvector"
     memory_db_path: str = "./chroma_db"
     memory_embed_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    # Required when memory_backend == "pgvector".
+    # Example: postgresql://agent:agent@localhost:5432/agent_demo
+    postgres_dsn: str = ""
 
     # FastAPI
     app_host: str = "0.0.0.0"

@@ -7,6 +7,7 @@ from typing import Any
 
 from backend.agents.state import AgentState
 from backend.llm.groq_client import GroqClient
+from backend.observability import traceable_node
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +53,14 @@ async def classify_intent(message: str, client: GroqClient) -> dict[str, Any]:
     }
 
 
+@traceable_node("intent_classifier")
 async def intent_classifier_node(state: AgentState, client: GroqClient) -> dict[str, Any]:
-    """LangGraph node wrapper."""
+    """LangGraph node wrapper.
+
+    Wrapped with ``traceable_node`` so the wall-clock latency is appended
+    to ``state.trace`` and (when LangSmith is wired) the call is sent as
+    a child run.
+    """
     intent = await classify_intent(state["message"], client)
     return {
         "intent": intent,

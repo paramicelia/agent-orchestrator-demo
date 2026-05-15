@@ -34,7 +34,7 @@ from backend.agents import (
 )
 from backend.agents.state import AgentState
 from backend.llm.groq_client import GroqClient
-from backend.memory.mem0_client import Mem0Client
+from backend.memory import MemoryClient
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 # --------------------------------------------------------------------------- #
 
 
-def make_load_memory_node(memory: Mem0Client):
+def make_load_memory_node(memory: MemoryClient):
     async def load_memory_node(state: AgentState) -> dict[str, Any]:
         hits = memory.search(state["user_id"], state["message"], limit=5)
         return {
@@ -55,7 +55,7 @@ def make_load_memory_node(memory: Mem0Client):
     return load_memory_node
 
 
-def make_save_memory_node(memory: Mem0Client, client: GroqClient):
+def make_save_memory_node(memory: MemoryClient, client: GroqClient):
     """Extract one short takeaway from the turn and persist it."""
 
     EXTRACT_SYSTEM = (
@@ -113,7 +113,7 @@ def route_to_agents(state: AgentState) -> list[str]:
 # --------------------------------------------------------------------------- #
 
 
-def build_graph(client: GroqClient, memory: Mem0Client):
+def build_graph(client: GroqClient, memory: MemoryClient):
     """Compile and return a runnable LangGraph supervisor."""
     graph = StateGraph(AgentState)
 

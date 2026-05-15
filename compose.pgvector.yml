@@ -1,0 +1,54 @@
+version: "3.9"
+
+# Local stack for the pgvector memory backend.
+#
+#   docker compose -f compose.pgvector.yml up -d
+#
+# Then either:
+#   * Run the app on the host with MEMORY_BACKEND=pgvector
+#     POSTGRES_DSN=postgresql://agent:agent@localhost:5432/agent_demo, or
+#   * docker compose -f compose.pgvector.yml --profile app up --build
+#     to run app + db together inside the same docker network.
+
+services:
+  pgvector:
+    image: pgvector/pgvector:pg16
+    container_name: agent-demo-pgvector
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+      POSTGRES_DB: agent_demo
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgvector_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent_demo"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: agent-orchestrator-demo:latest
+    container_name: agent-orchestrator-demo-pgvector
+    restart: unless-stopped
+    depends_on:
+      pgvector:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_SMART_MODEL=${GROQ_SMART_MODEL:-llama-3.3-70b-versatile}
+      - GROQ_LITE_MODEL=${GROQ_LITE_MODEL:-llama-3.1-8b-instant}
+      - MEMORY_BACKEND=pgvector
+      - POSTGRES_DSN=postgresql://agent:agent@pgvector:5432/agent_demo
+      - APP_LOG_LEVEL=info
+
+volumes:
+  pgvector_data:

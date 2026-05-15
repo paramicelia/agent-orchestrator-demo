@@ -13,6 +13,7 @@ from typing import Any
 
 from backend.agents.state import AgentState
 from backend.llm.groq_client import GroqClient
+from backend.observability import traceable_node
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,7 @@ async def adapt(
     return rewritten.strip() or text
 
 
+@traceable_node("persona_adapt")
 async def persona_adapt_node(state: AgentState, client: GroqClient) -> dict[str, Any]:
     """LangGraph node wrapper."""
     aggregated = state.get("aggregated_response", "")

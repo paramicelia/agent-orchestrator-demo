@@ -56,3 +56,36 @@ def test_tracing_disabled_when_flag_false_even_with_key(monkeypatch):
 
     importlib.reload(obs)
     assert obs.init_tracing() is False
+
+
+async def test_traceable_node_appends_latency_line():
+    """`traceable_node` must inject a `node:<name> took Xms` line into trace."""
+    from backend.observability import traceable_node
+
+    @traceable_node("dummy_node")
+    async def fake_node(state):
+        return {"trace": ["hello"], "selected_agents": ["topic"]}
+
+    out = await fake_node({"message": "x"})
+    assert "selected_agents" in out
+    # original trace line is preserved
+    assert out["trace"][0] == "hello"
+    # latency line is appended
+    assert any(line.startswith("node:dummy_node took") for line in out["trace"])
+    # structured latency entry is present for the UI
+    assert out["node_latencies"]
+    assert out["node_latencies"][0]["name"] == "dummy_node"
+    assert isinstance(out["node_latencies"][0]["ms"], int)
+
+
+async def test_traceable_node_with_no_existing_trace():
+    """If the wrapped node returns no trace key, the wrapper still injects one."""
+    from backend.observability import traceable_node
+
+    @traceable_node("solo_node")
+    async def fake_node(state):
+        return {"final_response": "done"}
+
+    out = await fake_node({})
+    assert out["final_response"] == "done"
+    assert any("node:solo_node took" in line for line in out["trace"])
